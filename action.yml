@@ -1,8 +1,8 @@
 name: Security Scan
 description: >
   Org-wide composite security scanning: zizmor (workflow linter),
-  osv-scanner (dependency vulnerabilities), and optional Python audit
-  (bandit + pip-audit). Adopt with a single `uses:` line.
+  osv-scanner (dependency vulnerabilities), optional Python audit
+  (bandit + pip-audit), and optional OSSF Scorecard. Adopt with a single `uses:` line.
 
 branding:
   icon: shield
@@ -82,6 +82,18 @@ inputs:
     description: Enable debug logging for python audit
     default: 'false'
 
+  # ── scorecard ──────────────────────────────────────────────────────────────
+  enable_scorecard:
+    description: >
+      Run OSSF Scorecard analysis (opt-in with 'true').
+      Requires id-token:write and actions:read permissions on the calling job.
+    default: 'false'
+  scorecard_publish_results:
+    description: >
+      Publish Scorecard results to the OSSF dashboard.
+      Only effective on default-branch pushes; ignored on PRs.
+    default: 'true'
+
   # ── Shared ─────────────────────────────────────────────────────────────────
   github_token:
     description: GitHub token for SARIF upload and PR comments
@@ -156,6 +168,24 @@ runs:
         working_directory: ${{ inputs.python_audit_working_directory }}
         debug: ${{ inputs.python_audit_debug }}
 
+    # ── scorecard ────────────────────────────────────────────────────────────
+    - name: Run Scorecard analysis
+      id: scorecard
+      if: ${{ inputs.enable_scorecard == 'true' }}
+      continue-on-error: true
+      uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
+      with:
+        results_file: scorecard.sarif
+        results_format: sarif
+        publish_results: ${{ inputs.scorecard_publish_results }}
+
+    - name: Upload Scorecard SARIF to Code Scanning
+      if: ${{ always() && inputs.enable_scorecard == 'true' }}
+      uses: github/codeql-action/upload-sarif@5c8a8a642e79153f5d047b10ec1cba1d1cc65699 # v3
+      with:
+        sarif_file: scorecard.sarif
+        category: scorecard
+
     # ── Aggregate results ─────────────────────────────────────────────────────
     - name: Aggregate results
       if: always()
@@ -168,6 +198,8 @@ runs:
         OSV_OUTCOME: ${{ steps.osv.outcome }}
         ENABLE_PYTHON_AUDIT: ${{ inputs.enable_python_audit }}
         PYTHON_AUDIT_OUTCOME: ${{ steps.python-audit.outcome }}
+        ENABLE_SCORECARD: ${{ inputs.enable_scorecard }}
+        SCORECARD_OUTCOME: ${{ steps.scorecard.outcome }}
       run: |
         failed=0
 
@@ -183,6 +215,11 @@ runs:
 
         if [[ "$ENABLE_PYTHON_AUDIT" == 'true' && "$PYTHON_AUDIT_OUTCOME" == 'failure' ]]; then
           echo "::error::python security audit found blocking issues"
+          failed=1
+        fi
+
+        if [[ "$ENABLE_SCORECARD" == 'true' && "$SCORECARD_OUTCOME" == 'failure' ]]; then
+          echo "::error::Scorecard analysis failed"
           failed=1
         fi
 

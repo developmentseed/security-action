@@ -20,6 +20,7 @@ jobs:
         uses: ./
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          # zizmor scans this repo's own workflows
+          zizmor_persona: pedantic
+          enable_scorecard: 'false' # scorecard.yml handles this with the required permissions
           # osv-scanner scans for dependency vulnerabilities
           # python audit is off (not a Python project)
