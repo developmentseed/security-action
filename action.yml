@@ -108,7 +108,7 @@ runs:
       id: zizmor
       if: ${{ inputs.enable_zizmor != 'false' }}
       continue-on-error: true
-      uses: zizmorcore/zizmor-action@71321a20a9ded102f6e9ce5718a2fcec2c4f70d8 # v0.5.2
+      uses: zizmorcore/zizmor-action@b1d7e1fb5de872772f31590499237e7cce841e8e # v0.5.3
       with:
         persona: ${{ inputs.zizmor_persona }}
         min-severity: ${{ inputs.zizmor_min_severity }}
@@ -159,7 +159,7 @@ runs:
 
     - name: Upload osv-scanner SARIF to Code Scanning
       if: ${{ always() && inputs.enable_osv != 'false' && inputs.osv_upload_sarif == 'true' && steps.osv-sarif.outputs.upload == 'true' }}
-      uses: github/codeql-action/upload-sarif@5c8a8a642e79153f5d047b10ec1cba1d1cc65699 # v3.35.1
+      uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4.35.2
       with:
         sarif_file: ${{ inputs.osv_results_file_name }}
         category: osv-scanner
@@ -195,7 +195,7 @@ runs:
 
     - name: Upload Scorecard SARIF to Code Scanning
       if: ${{ always() && inputs.enable_scorecard == 'true' }}
-      uses: github/codeql-action/upload-sarif@5c8a8a642e79153f5d047b10ec1cba1d1cc65699 # v3.35.1
+      uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4.35.2
       with:
         sarif_file: scorecard.sarif
         category: scorecard
