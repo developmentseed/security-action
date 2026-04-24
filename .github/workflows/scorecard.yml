@@ -1,0 +1,36 @@
+name: Scorecard analysis workflow
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    # Weekly on Saturdays.
+    - cron: "30 1 * * 6"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read # Required by Scorecard to evaluate workflow security posture
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write # Upload Scorecard SARIF to Code Scanning
+      id-token: write         # GitHub OIDC token for publish_results
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: ./
+        with:
+          enable_scorecard: 'true'
+          enable_zizmor: 'false'
+          enable_osv: 'false'

@@ -1,0 +1,240 @@
+name: Security Scan
+description: >
+  Org-wide composite security scanning: zizmor (workflow linter),
+  osv-scanner (dependency vulnerabilities), optional Python audit
+  (bandit + pip-audit), and optional OSSF Scorecard. Adopt with a single `uses:` line.
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  # ── Toggles ────────────────────────────────────────────────────────────────
+  enable_zizmor:
+    description: Run zizmor GitHub Actions workflow linter (opt-out with 'false')
+    default: 'true'
+  enable_osv:
+    description: Run osv-scanner dependency vulnerability scanner (opt-out with 'false')
+    default: 'true'
+  enable_python_audit:
+    description: Run bandit + pip-audit Python security audit (opt-in with 'true')
+    default: 'false'
+
+  # ── zizmor ─────────────────────────────────────────────────────────────────
+  zizmor_persona:
+    description: Auditing persona — regular / pedantic / auditor
+    default: 'regular'
+  zizmor_min_severity:
+    description: Minimum severity to report — low / medium / high; empty = all
+    default: ''
+  zizmor_min_confidence:
+    description: Minimum confidence to report — low / medium / high; empty = all
+    default: ''
+  zizmor_online_audits:
+    description: Enable zizmor online audit checks
+    default: 'true'
+  zizmor_config:
+    description: Path to custom zizmor configuration file; empty = none
+    default: ''
+
+  # ── osv-scanner ────────────────────────────────────────────────────────────
+  osv_scan_args:
+    description: osv-scanner CLI args, one per line
+    default: |-
+      --recursive
+      --allow-no-lockfiles
+      ./
+  osv_fail_on_vuln:
+    description: Fail the job when osv-scanner finds vulnerabilities
+    default: 'true'
+  osv_upload_sarif:
+    description: Upload osv-scanner results to GitHub Code Scanning
+    default: 'true'
+  osv_results_file_name:
+    description: SARIF output filename for osv-scanner results
+    default: 'results.sarif'
+
+  # ── python audit ───────────────────────────────────────────────────────────
+  python_audit_tools:
+    description: Comma-separated tools to run — bandit, pip-audit
+    default: 'bandit,pip-audit'
+  python_audit_bandit_scan_dirs:
+    description: Comma-separated directories for bandit
+    default: '.'
+  python_audit_bandit_severity_threshold:
+    description: Minimum bandit severity that blocks — high / medium / low
+    default: 'high'
+  python_audit_pip_audit_block_on:
+    description: When pip-audit blocks — fixable / all / none
+    default: 'fixable'
+  python_audit_package_manager:
+    description: Dependency resolution for pip-audit — uv / pip / poetry / pipenv / requirements
+    default: 'requirements'
+  python_audit_requirements_file:
+    description: Requirements file path (when package_manager=requirements)
+    default: 'requirements.txt'
+  python_audit_comment_on:
+    description: When to post a PR comment — never / blocking / always
+    default: 'never'
+  python_audit_working_directory:
+    description: Working directory for python audit
+    default: '.'
+  python_audit_debug:
+    description: Enable debug logging for python audit
+    default: 'false'
+
+  # ── scorecard ──────────────────────────────────────────────────────────────
+  enable_scorecard:
+    description: >
+      Run OSSF Scorecard analysis (opt-in with 'true').
+      Requires id-token:write and actions:read permissions on the calling job.
+    default: 'false'
+  scorecard_publish_results:
+    description: >
+      Publish Scorecard results to the OSSF dashboard.
+      Only effective on default-branch pushes; ignored on PRs.
+    default: 'true'
+
+  # ── Shared ─────────────────────────────────────────────────────────────────
+  github_token:
+    description: GitHub token for SARIF upload and PR comments
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    # ── zizmor ──────────────────────────────────────────────────────────────
+    - name: Run zizmor
+      id: zizmor
+      if: ${{ inputs.enable_zizmor != 'false' }}
+      continue-on-error: true
+      uses: zizmorcore/zizmor-action@71321a20a9ded102f6e9ce5718a2fcec2c4f70d8 # v0.5.2
+      with:
+        persona: ${{ inputs.zizmor_persona }}
+        min-severity: ${{ inputs.zizmor_min_severity }}
+        min-confidence: ${{ inputs.zizmor_min_confidence }}
+        online-audits: ${{ inputs.zizmor_online_audits }}
+        config: ${{ inputs.zizmor_config }}
+        token: ${{ inputs.github_token }}
+
+    # ── osv-scanner ──────────────────────────────────────────────────────────
+    - name: Build osv-scanner args
+      id: osv-args
+      if: ${{ inputs.enable_osv != 'false' }}
+      shell: bash
+      env:
+        OSV_SCAN_ARGS: ${{ inputs.osv_scan_args }}
+        OSV_UPLOAD_SARIF: ${{ inputs.osv_upload_sarif }}
+        OSV_RESULTS_FILE: ${{ inputs.osv_results_file_name }}
+      run: |
+        if [[ "$OSV_UPLOAD_SARIF" == 'true' ]]; then
+          OSV_SCAN_ARGS="${OSV_SCAN_ARGS}"$'\n--format=sarif'$'\n'"--output=${OSV_RESULTS_FILE}"
+        fi
+        {
+          echo 'args<<__OSV_EOF__'
+          echo "$OSV_SCAN_ARGS"
+          echo '__OSV_EOF__'
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Run osv-scanner
+      id: osv
+      if: ${{ inputs.enable_osv != 'false' }}
+      continue-on-error: true
+      uses: google/osv-scanner-action/osv-scanner-action@c51854704019a247608d928f370c98740469d4b5 # v2.3.5
+      with:
+        scan-args: ${{ steps.osv-args.outputs.args }}
+
+    - name: Check osv-scanner SARIF output
+      id: osv-sarif
+      if: ${{ always() && inputs.enable_osv != 'false' && inputs.osv_upload_sarif == 'true' }}
+      shell: bash
+      env:
+        SARIF_FILE: ${{ inputs.osv_results_file_name }}
+      run: |
+        if [[ -f "$SARIF_FILE" ]]; then
+          echo 'upload=true' >> "$GITHUB_OUTPUT"
+        else
+          echo 'upload=false' >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Upload osv-scanner SARIF to Code Scanning
+      if: ${{ always() && inputs.enable_osv != 'false' && inputs.osv_upload_sarif == 'true' && steps.osv-sarif.outputs.upload == 'true' }}
+      uses: github/codeql-action/upload-sarif@5c8a8a642e79153f5d047b10ec1cba1d1cc65699 # v3.35.1
+      with:
+        sarif_file: ${{ inputs.osv_results_file_name }}
+        category: osv-scanner
+
+    # ── python audit ─────────────────────────────────────────────────────────
+    - name: Run python security audit
+      id: python-audit
+      if: ${{ inputs.enable_python_audit == 'true' }}
+      continue-on-error: true
+      uses: developmentseed/action-python-security-auditing@8ebea22ea75dfba2244ed9883c2aa6cb4df8d9a9 # v0.6.0
+      with:
+        tools: ${{ inputs.python_audit_tools }}
+        bandit_scan_dirs: ${{ inputs.python_audit_bandit_scan_dirs }}
+        bandit_severity_threshold: ${{ inputs.python_audit_bandit_severity_threshold }}
+        pip_audit_block_on: ${{ inputs.python_audit_pip_audit_block_on }}
+        package_manager: ${{ inputs.python_audit_package_manager }}
+        requirements_file: ${{ inputs.python_audit_requirements_file }}
+        comment_on: ${{ inputs.python_audit_comment_on }}
+        github_token: ${{ inputs.github_token }}
+        working_directory: ${{ inputs.python_audit_working_directory }}
+        debug: ${{ inputs.python_audit_debug }}
+
+    # ── scorecard ────────────────────────────────────────────────────────────
+    - name: Run Scorecard analysis
+      id: scorecard
+      if: ${{ inputs.enable_scorecard == 'true' }}
+      continue-on-error: true
+      uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
+      with:
+        results_file: scorecard.sarif
+        results_format: sarif
+        publish_results: ${{ inputs.scorecard_publish_results }}
+
+    - name: Upload Scorecard SARIF to Code Scanning
+      if: ${{ always() && inputs.enable_scorecard == 'true' }}
+      uses: github/codeql-action/upload-sarif@5c8a8a642e79153f5d047b10ec1cba1d1cc65699 # v3.35.1
+      with:
+        sarif_file: scorecard.sarif
+        category: scorecard
+
+    # ── Aggregate results ─────────────────────────────────────────────────────
+    - name: Aggregate results
+      if: always()
+      shell: bash
+      env:
+        ENABLE_ZIZMOR: ${{ inputs.enable_zizmor }}
+        ZIZMOR_OUTCOME: ${{ steps.zizmor.outcome }}
+        ENABLE_OSV: ${{ inputs.enable_osv }}
+        OSV_FAIL_ON_VULN: ${{ inputs.osv_fail_on_vuln }}
+        OSV_OUTCOME: ${{ steps.osv.outcome }}
+        ENABLE_PYTHON_AUDIT: ${{ inputs.enable_python_audit }}
+        PYTHON_AUDIT_OUTCOME: ${{ steps.python-audit.outcome }}
+        ENABLE_SCORECARD: ${{ inputs.enable_scorecard }}
+        SCORECARD_OUTCOME: ${{ steps.scorecard.outcome }}
+      run: |
+        failed=0
+
+        if [[ "$ENABLE_ZIZMOR" != 'false' && "$ZIZMOR_OUTCOME" == 'failure' ]]; then
+          echo "::error::zizmor found workflow security issues"
+          failed=1
+        fi
+
+        if [[ "$ENABLE_OSV" != 'false' && "$OSV_FAIL_ON_VULN" == 'true' && "$OSV_OUTCOME" == 'failure' ]]; then
+          echo "::error::osv-scanner found vulnerabilities"
+          failed=1
+        fi
+
+        if [[ "$ENABLE_PYTHON_AUDIT" == 'true' && "$PYTHON_AUDIT_OUTCOME" == 'failure' ]]; then
+          echo "::error::python security audit found blocking issues"
+          failed=1
+        fi
+
+        if [[ "$ENABLE_SCORECARD" == 'true' && "$SCORECARD_OUTCOME" == 'failure' ]]; then
+          echo "::error::Scorecard analysis failed"
+          failed=1
+        fi
+
+        exit $failed
